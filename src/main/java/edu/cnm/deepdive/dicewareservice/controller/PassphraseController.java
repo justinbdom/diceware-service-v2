@@ -2,6 +2,7 @@ package edu.cnm.deepdive.dicewareservice.controller;
 
 import edu.cnm.deepdive.dicewareservice.model.dao.PassphraseRepository;
 import edu.cnm.deepdive.dicewareservice.model.entity.Passphrase;
+import edu.cnm.deepdive.dicewareservice.model.entity.User;
 import edu.cnm.deepdive.dicewareservice.model.entity.Word;
 import edu.cnm.deepdive.dicewareservice.service.PassphraseGenerator;
 import java.util.List;
@@ -11,6 +12,7 @@ import org.springframework.hateoas.ExposesResourceFor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -41,45 +43,60 @@ public class PassphraseController {
   @PostMapping(
       consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
   public ResponseEntity<Passphrase> post(@RequestBody Passphrase passphrase,
-      @RequestParam(defaultValue = "6") int length) {
-      List<Word> words = passphrase.getWords();
-      if (words.isEmpty()) {
-        String[] dicewareWords = generator.passphrase(length);
-        for (String dw : dicewareWords) {
-          Word word = new Word();
-          word.setWord(dw);
-          words.add(word);
-        }
+      @RequestParam(defaultValue = "6") int length, Authentication auth) {
+    List<Word> words = passphrase.getWords();
+    if (words.isEmpty()) {
+      String[] dicewareWords = generator.passphrase(length);
+      for (String dw : dicewareWords) {
+        Word word = new Word();
+        word.setWord(dw);
+        words.add(word);
       }
-      for (Word word : words) {
-        word.setPassphrase(passphrase);
-      }
-      passphraseRepository.save(passphrase);
-      return ResponseEntity.created(passphrase.getHref()).body(passphrase);
+    }
+    for (Word word : words) {
+      word.setPassphrase(passphrase);
+    }
+    passphrase.setUser((User) auth.getPrincipal());
+    passphraseRepository.save(passphrase);
+    return ResponseEntity.created(passphrase.getHref()).body(passphrase);
   }
 
   @GetMapping(value = "{key:^\\D.*}", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Passphrase get(@PathVariable String key) {
-    return passphraseRepository.getFirstByKey(key).get();
+  public Passphrase get(@PathVariable String key, Authentication auth) {
+    return passphraseRepository.getPassphraseByUserAndKey(
+        (User) auth.getPrincipal(), key).get();
   }
 
   @GetMapping(value = "{id:^\\d+$}", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Passphrase get(@PathVariable long id) {
-    return passphraseRepository.findById(id).get();
+  public Passphrase get(@PathVariable long id, Authentication auth) {
+    return passphraseRepository.getPassphraseByUserAndId((User) auth.getPrincipal(), id).get();
   }
 
   @DeleteMapping(value = "{id:^\\d+$}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void delete(@PathVariable long id) {
-    passphraseRepository.delete(get(id));
+  public void delete(@PathVariable long id, Authentication auth) {
+    passphraseRepository.delete(get(id, auth));
   }
 
   @PutMapping(value = "{id:^\\d+$}",
       consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-  public Passphrase put(@PathVariable long id, @RequestBody Passphrase passphrase) {
-    Passphrase existing = get(id);
+  public Passphrase put(@PathVariable long id, @RequestBody Passphrase passphrase,
+      @RequestParam(defaultValue = "false") boolean regenerate,
+      @RequestParam(defaultValue = "6") int length, Authentication auth) {
+    Passphrase existing = get(id, auth);
     if (passphrase.getKey() != null) {
       existing.setKey(passphrase.getKey());
+    }
+    if (regenerate) {
+      List<Word> words = passphrase.getWords();
+      words.clear();
+      String[] dicewareWords = generator.passphrase(length);
+      for (String dw : dicewareWords) {
+
+        Word word = new Word();
+        word.setWord(dw);
+        words.add(word);
+      }
     }
     if (!passphrase.getWords().isEmpty()) {
       existing.getWords().forEach((word) -> word.setPassphrase(null));
@@ -92,8 +109,8 @@ public class PassphraseController {
   }
 
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-  public Iterable<Passphrase> getAll() {
-    return passphraseRepository.getAllByOrderByKeyAsc();
+  public Iterable<Passphrase> getAll(Authentication auth) {
+    return passphraseRepository.getAllByUserOrderByKeyAsc((User) auth.getPrincipal());
   }
 
   @ResponseStatus(HttpStatus.NOT_FOUND)
